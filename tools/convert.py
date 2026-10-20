@@ -14,6 +14,7 @@ Everything is emitted as C arrays so the PS3 build needs no file I/O and
 has no endianness issues (the compiler lays the data out big-endian).
 """
 import os, sys, subprocess, math
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import numpy as np
 from PIL import Image
 
@@ -166,14 +167,22 @@ class Baker:
         self.bake((mp, P[j], P[k]), (muv, UV[j], UV[k]), out, depth + 1)
 
 
-def build_mesh(objp, pngp):
+GROUND = {"grass_light", "grass_dark", "road_stripes", "road_blank", "river", "railroad"}
+
+
+def build_mesh(objp, pngp, name=""):
     vs, vts, tris = parse_obj(os.path.join(A, objp))
     baker = Baker(os.path.join(A, pngp))
     pieces = []
-    for tri in tris:
-        P = tuple(vs[i] for i, _ in tri)
-        UV = tuple(vts[t] if t is not None else (0, 0) for _, t in tri)
-        baker.bake(P, UV, pieces)
+    if name not in GROUND:
+        # remastered: faces rebuilt from the painted texture (tools/remaster.py)
+        import remaster
+        pieces = remaster.remaster_mesh(vs, vts, tris, baker, baker.bake)
+    else:
+        for tri in tris:
+            P = tuple(vs[i] for i, _ in tri)
+            UV = tuple(vts[t] if t is not None else (0, 0) for _, t in tri)
+            baker.bake(P, UV, pieces)
     # weld vertices, compute normals, drop degenerate triangles
     vmap, verts, out = {}, [], []
     for P, col in pieces:
@@ -221,7 +230,7 @@ def main():
     total_tris = 0
     names = []
     for name, objp, pngp in MODELS:
-        verts, tris, mn, mx = build_mesh(objp, pngp)
+        verts, tris, mn, mx = build_mesh(objp, pngp, name)
         total_tris += len(tris)
         names.append(name)
         print(f"{name:14s} verts={len(verts):5d} tris={len(tris):5d} "

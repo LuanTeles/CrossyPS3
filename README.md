@@ -47,9 +47,13 @@ Title ID `BBCN00001`. Saves (`save.txt`: top score + mute) go to
 ## How it's built
 
 - `tools/convert.py` reads the original OBJ models + palette textures and
-  bakes each face's texture colour into the geometry (subdividing the big
-  ground strips so road stripes and grass tufts survive), and converts the
-  sounds to 48 kHz PCM. Output is `source/assets_data.c` — no file I/O and no
+  converts the sounds to 48 kHz PCM. Object models go through the remaster
+  pass in `tools/remaster.py`: every textured face is rebuilt as clean
+  rectangles matching the painted pixels (windows, lights, eyes, bark), so
+  the PS3 shows the original paint job crisply with no texture sampling.
+  Ground strips are baked by subdividing faces until each is one colour.
+  `art/` holds packed copies of the original and remastered models for
+  previewing in Blender. Output is `source/assets_data.c` — no file I/O and no
   endianness issues on the big-endian Cell.
 - `source/render.c` — software renderer (flat-shaded triangles, z-buffer,
   the original's Lambert lighting values, planar ground shadows) at 640×360.
