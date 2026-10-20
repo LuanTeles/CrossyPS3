@@ -107,6 +107,7 @@ void plat_present(void) {
 
 double plat_seconds(void) { return frame / 60.0; }
 void plat_rumble(int s) { (void)s; }
+void plat_parallel(void (*fn)(int)) { fn(0); fn(1); }
 void plat_lock(void) {}
 void plat_unlock(void) {}
 

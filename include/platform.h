@@ -15,6 +15,9 @@ unsigned int plat_read_pad(void);
 void plat_present(void);                  /* scale rb_color to the TV, flip, vsync */
 double plat_seconds(void);
 void plat_rumble(int strength);           /* 0 = off, 1..255 */
+/* Run fn(0) and fn(1) concurrently (second PPU hardware thread on PS3),
+   returning when both are done. */
+void plat_parallel(void (*fn)(int));
 void plat_lock(void);                     /* guards the audio mixer */
 void plat_unlock(void);
 int  plat_load_text(const char *name, char *buf, int cap);

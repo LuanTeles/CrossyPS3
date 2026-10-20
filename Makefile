@@ -37,7 +37,7 @@ CONTENTID	:=	UP0001-$(APPID)_00-0000000000000000
 ICON0		:=	$(CURDIR)/pkgfiles/ICON0.PNG
 SFOXML		:=	$(CURDIR)/sfo.xml
 
-CFLAGS		=	-O2 -Wall -std=gnu99 -mcpu=cell $(MACHDEP) $(INCLUDE)
+CFLAGS		=	-O3 -ffast-math -fno-strict-aliasing -Wall -std=gnu99 -mcpu=cell -mtune=cell $(MACHDEP) $(INCLUDE)
 CXXFLAGS	=	$(CFLAGS)
 LDFLAGS		=	$(MACHDEP) -Wl,-Map,$(notdir $@).map
 
@@ -88,7 +88,7 @@ $(OUTPUT).self: $(OUTPUT).elf
 $(OUTPUT).elf:	$(OFILES)
 
 # the generated asset tables are large; don't spend optimiser time on them
-assets_data.o: CFLAGS := $(subst -O2,-O0,$(CFLAGS))
+assets_data.o: CFLAGS := $(subst -O3,-O0,$(CFLAGS))
 
 -include $(DEPENDS)
 

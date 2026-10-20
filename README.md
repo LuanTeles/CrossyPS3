@@ -41,6 +41,7 @@ Title ID `BBCN00001`. Saves (`save.txt`: top score + mute) go to
 | START | pause |
 | O (paused or game over) | back to title |
 | SELECT | sound on/off |
+| TRIANGLE | show/hide FPS counter |
 | PS button → Quit Game | returns to XMB cleanly |
 
 ## How it's built
@@ -51,8 +52,12 @@ Title ID `BBCN00001`. Saves (`save.txt`: top score + mute) go to
   sounds to 48 kHz PCM. Output is `source/assets_data.c` — no file I/O and no
   endianness issues on the big-endian Cell.
 - `source/render.c` — software renderer (flat-shaded triangles, z-buffer,
-  the original's Lambert lighting values, planar ground shadows) at 640×360,
-  scaled to the TV's mode (720p ×2, 1080p ×3, SD stretched).
+  the original's Lambert lighting values, planar ground shadows) at 640×360.
+  Edges and depth step in 64-bit fixed point (no float↔int conversions per
+  scanline, which stall the Cell PPU), and the screen is split into two
+  halves rendered on the PPU's two hardware threads.
+- The RSX's scaled-blit engine upscales the frame to the TV mode; a
+  first-frame self-test falls back to CPU scaling if that doesn't work.
 - `source/game.c` — logic ported from `GameEngine.ts`, `CrossyGame.ts`,
   `CrossyPlayer.ts`, `Row/*` and `Particles/*`, on a fixed 60 Hz step with a
   small GSAP-style tween engine.

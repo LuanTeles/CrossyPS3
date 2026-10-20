@@ -260,6 +260,7 @@ static unsigned int prev_dir_held;
 
 static void game_over(void);
 static void save_settings(void);
+static int show_fps;
 
 static const Mesh *const car_meshes[8] = {
     &mesh_car_police, &mesh_car_blue, &mesh_truck_blue, &mesh_car_green,
@@ -1104,6 +1105,7 @@ static void show_toast(const char *s) {
 void game_input(unsigned int pressed, unsigned int released, unsigned int held) {
     const unsigned int dirs = PAD_UP | PAD_DOWN | PAD_LEFT | PAD_RIGHT | PAD_CROSS;
     (void)held;
+    if (pressed & PAD_TRIANGLE) show_fps = !show_fps;
     if (pressed & PAD_SELECT) {
         audio_set_muted(!audio_muted());
         show_toast(audio_muted() ? "SOUND OFF" : "SOUND ON");
@@ -1202,9 +1204,8 @@ static int row_visible(const Row *r, V3 off) {
     return z > -9 && z < 16;
 }
 
-static Row *all_rows[MAX_ROWS * 4];
-
-static void draw_world(void) {
+static void draw_world(int ctx) {
+    Row *all_rows[MAX_ROWS * 4];
     V3 off = world_offset();
     Xform x;
     int i, j, n = 0;
@@ -1222,11 +1223,11 @@ static void draw_world(void) {
         Row *r = all_rows[i];
         if (!row_visible(r, off)) continue;
         set_xf(&x, off, 0, 0, r->z, 0);
-        r_draw_mesh(floor_mesh(r), &x, 0);
+        r_draw_mesh(ctx, floor_mesh(r), &x, 0);
     }
 
     /* 2. shadows on the ground */
-    r_shadow_pass_begin();
+    r_shadow_pass_begin(ctx);
     for (i = 0; i < n; i++) {
         Row *r = all_rows[i];
         float py = row_floor_y(r);
@@ -1234,28 +1235,28 @@ static void draw_world(void) {
         if (r->type == ROW_GRASS) {
             for (j = 0; j < r->nobs; j++) {
                 set_xf(&x, off, (float)r->obs_x[j], GROUND_LEVEL, r->z, 0);
-                if (r_mesh_on_screen(r->obs_mesh[j], &x)) r_draw_shadow(r->obs_mesh[j], &x, py + off.y);
+                if (r_mesh_on_screen(r->obs_mesh[j], &x)) r_draw_shadow(ctx, r->obs_mesh[j], &x, py + off.y);
             }
         } else if (r->type == ROW_ROAD || r->type == ROW_WATER) {
             for (j = 0; j < r->nents; j++) {
                 Entity *e = &r->ents[j];
                 set_xf(&x, off, e->pos.x, e->pos.y, r->z + e->pos.z, e->rot_y);
-                if (r_mesh_on_screen(e->mesh, &x)) r_draw_shadow(e->mesh, &x, py + off.y);
+                if (r_mesh_on_screen(e->mesh, &x)) r_draw_shadow(ctx, e->mesh, &x, py + off.y);
             }
         } else if (r->type == ROW_RAIL && r->active) {
             float ox = r->train.pos.x;
             if (ox + r->train_maxx + off.x > -12 && ox + r->train_minx + off.x < 12) {
                 float cx = 0;
                 set_xf(&x, off, ox, r->train.pos.y, r->z + r->train.pos.z, 0);
-                r_draw_shadow(&mesh_train_front, &x, py + off.y);
+                r_draw_shadow(ctx, &mesh_train_front, &x, py + off.y);
                 cx = js_round(mesh_train_front.max[0] - mesh_train_front.min[0]);
                 for (j = 0; j < r->train_mids; j++) {
                     set_xf(&x, off, ox + cx, r->train.pos.y, r->z + r->train.pos.z, 0);
-                    r_draw_shadow(&mesh_train_middle, &x, py + off.y);
+                    r_draw_shadow(ctx, &mesh_train_middle, &x, py + off.y);
                     cx += js_round(mesh_train_middle.max[0] - mesh_train_middle.min[0]);
                 }
                 set_xf(&x, off, ox + cx, r->train.pos.y, r->z + r->train.pos.z, 0);
-                r_draw_shadow(&mesh_train_back, &x, py + off.y);
+                r_draw_shadow(ctx, &mesh_train_back, &x, py + off.y);
             }
         }
     }
@@ -1268,7 +1269,7 @@ static void draw_world(void) {
         x.scale[0] = hero.scale.x; x.scale[1] = hero.scale.y; x.scale[2] = hero.scale.z;
         x.pre_scale = hero_pre_scale;
         memcpy(x.pre_off, hero_pre_off, sizeof(x.pre_off));
-        if (hero.pos.y > hero_plane - 0.05f) r_draw_shadow(&mesh_chicken, &x, hero_plane + off.y);
+        if (hero.pos.y > hero_plane - 0.05f) r_draw_shadow(ctx, &mesh_chicken, &x, hero_plane + off.y);
     }
 
     /* 3. objects */
@@ -1278,13 +1279,13 @@ static void draw_world(void) {
         if (r->type == ROW_GRASS) {
             for (j = 0; j < r->nobs; j++) {
                 set_xf(&x, off, (float)r->obs_x[j], GROUND_LEVEL, r->z, 0);
-                r_draw_mesh(r->obs_mesh[j], &x, 0);
+                r_draw_mesh(ctx, r->obs_mesh[j], &x, 0);
             }
         } else if (r->type == ROW_ROAD || r->type == ROW_WATER) {
             for (j = 0; j < r->nents; j++) {
                 Entity *e = &r->ents[j];
                 set_xf(&x, off, e->pos.x, e->pos.y, r->z + e->pos.z, e->rot_y);
-                r_draw_mesh(e->mesh, &x, 0);
+                r_draw_mesh(ctx, e->mesh, &x, 0);
             }
             if (r->type == ROW_WATER) {
                 int s, k;
@@ -1295,27 +1296,27 @@ static void draw_world(void) {
                         float c[3];
                         if (p->phase == 0 || p->s < 0.02f) continue;
                         c[0] = bx + p->x + off.x; c[1] = 0.2f + off.y; c[2] = r->z - 0.5f + p->z + off.z;
-                        r_draw_quad_flat(c, 0.6f * p->s, p->rot_y, 0xFFFFFF);
+                        r_draw_quad_flat(ctx, c, 0.6f * p->s, p->rot_y, 0xFFFFFF);
                     }
                 }
             }
         } else if (r->type == ROW_RAIL) {
             const Mesh *lm = r->light_off ? &mesh_light_off : (r->light_a ? &mesh_light_on0 : &mesh_light_on1);
             set_xf(&x, off, 0, 0, r->z - 0.5f, PI_F);
-            r_draw_mesh(lm, &x, 0);
+            r_draw_mesh(ctx, lm, &x, 0);
             if (r->active) {
                 float ox = r->train.pos.x, cx;
                 if (ox + r->train_maxx + off.x > -12 && ox + r->train_minx + off.x < 12) {
                     set_xf(&x, off, ox, r->train.pos.y, r->z + r->train.pos.z, 0);
-                    r_draw_mesh(&mesh_train_front, &x, 0);
+                    r_draw_mesh(ctx, &mesh_train_front, &x, 0);
                     cx = js_round(mesh_train_front.max[0] - mesh_train_front.min[0]);
                     for (j = 0; j < r->train_mids; j++) {
                         set_xf(&x, off, ox + cx, r->train.pos.y, r->z + r->train.pos.z, 0);
-                        r_draw_mesh(&mesh_train_middle, &x, 0);
+                        r_draw_mesh(ctx, &mesh_train_middle, &x, 0);
                         cx += js_round(mesh_train_middle.max[0] - mesh_train_middle.min[0]);
                     }
                     set_xf(&x, off, ox + cx, r->train.pos.y, r->z + r->train.pos.z, 0);
-                    r_draw_mesh(&mesh_train_back, &x, 0);
+                    r_draw_mesh(ctx, &mesh_train_back, &x, 0);
                 }
             }
         }
@@ -1328,7 +1329,7 @@ static void draw_world(void) {
     x.scale[0] = hero.scale.x; x.scale[1] = hero.scale.y; x.scale[2] = hero.scale.z;
     x.pre_scale = hero_pre_scale;
     memcpy(x.pre_off, hero_pre_off, sizeof(x.pre_off));
-    r_draw_mesh(&mesh_chicken, &x, 0);
+    r_draw_mesh(ctx, &mesh_chicken, &x, 0);
 
     /* particles */
     for (i = 0; i < 20; i++) {
@@ -1340,7 +1341,7 @@ static void draw_world(void) {
         c[2] = feathers_origin.z + p->pos.z + off.z;
         s[0] = 0.1f * p->scale.x; s[1] = 0.1f * p->scale.y; s[2] = 0.02f * p->scale.z;
         rr[0] = p->rot.x; rr[1] = p->rot.y; rr[2] = p->rot.z;
-        r_draw_box(c, s, rr, 0xFFFFFF, 0, 0);
+        r_draw_box(ctx, c, s, rr, 0xFFFFFF, 0, 0);
     }
     for (i = 0; i < 15; i++) {
         Particle *p = &water_parts[i];
@@ -1350,7 +1351,7 @@ static void draw_world(void) {
         c[1] = water_origin.y + p->pos.y + off.y;
         c[2] = water_origin.z + p->pos.z + off.z;
         s[0] = 0.2f * p->scale.x; s[1] = 0.3f * p->scale.y; s[2] = 0.2f * p->scale.z;
-        r_draw_box(c, s, rr, 0x71D7FF, 0, 0);
+        r_draw_box(ctx, c, s, rr, 0x71D7FF, 0, 0);
     }
 }
 
@@ -1403,9 +1404,29 @@ static void draw_ui(void) {
     if (toast_time > 0) r_text_centered(RH - 40, toast, 3, 0xFFFFFF, 2);
 }
 
+/* runs once per screen band, possibly on two hardware threads at once;
+   only reads game state */
+static void render_band(int ctx) {
+    r_clear_band(ctx);
+    draw_world(ctx);
+}
+
+static double fps_last;
+static int fps_frames;
+static char fps_text[24] = "";
+
 void game_render(void) {
     r_begin(SCENE_COLOR, VIEW_HALF_HEIGHT, 0, 0);
-    draw_world();
+    plat_parallel(render_band);
     draw_ui();
+    /* FPS counter (TRIANGLE toggles) */
+    fps_frames++;
+    if (plat_seconds() - fps_last >= 1.0) {
+        double now = plat_seconds();
+        snprintf(fps_text, sizeof(fps_text), "%.0f FPS", fps_frames / (now - fps_last));
+        fps_last = now;
+        fps_frames = 0;
+    }
+    if (show_fps) r_text(RW - r_text_width(fps_text, 2) - 10, 10, fps_text, 2, 0xFFFFFF, 1);
 }
 

@@ -126,11 +126,115 @@ static int video_init(void) {
     return 0;
 }
 
+/* ---- hardware upscale --------------------------------------------------
+   The game renders 640x360. Scaling that to 1080p on the CPU means writing
+   ~8 MB per frame into video memory, which is slow from the PPU. Instead the
+   frame is copied (0.9 MB) into RSX-visible main memory and the RSX's
+   scaled-image engine blits it to the framebuffer (same calls as PSL1GHT's
+   "blitting" sample). A self-test on the first frame falls back to CPU
+   scaling if the blit doesn't produce the expected pixels. */
+static u32 *src_buf[2];
+static u32 src_off[2];
+static int hw_scale;
+
+static void hw_blit(int src, int dst) {
+    gcmTransferScale scale;
+    gcmTransferSurface surface;
+    memset(&scale, 0, sizeof(scale));
+    memset(&surface, 0, sizeof(surface));
+    scale.conversion = GCM_TRANSFER_CONVERSION_TRUNCATE;
+    scale.format = GCM_TRANSFER_SCALE_FORMAT_X8R8G8B8;
+    scale.origin = GCM_TRANSFER_ORIGIN_CORNER;
+    scale.operation = GCM_TRANSFER_OPERATION_SRCCOPY;
+    scale.interp = GCM_TRANSFER_INTERPOLATOR_NEAREST;
+    scale.clipX = 0;
+    scale.clipY = 0;
+    scale.clipW = scr_w;
+    scale.clipH = scr_h;
+    scale.outX = 0;
+    scale.outY = 0;
+    scale.outW = scr_w;
+    scale.outH = scr_h;
+    scale.ratioX = rsxGetFixedSint32((float)RW / (float)scr_w);
+    scale.ratioY = rsxGetFixedSint32((float)RH / (float)scr_h);
+    scale.inX = rsxGetFixedUint16(0.0f);
+    scale.inY = rsxGetFixedUint16(0.0f);
+    scale.inW = RW;
+    scale.inH = RH;
+    scale.offset = src_off[src];
+    scale.pitch = RW * sizeof(u32);
+
+    surface.format = GCM_TRANSFER_SURFACE_FORMAT_A8R8G8B8;
+    surface.pitch = scr_w * sizeof(u32);
+    surface.offset = fb_offset[dst];
+
+    rsxSetTransferScaleMode(context, GCM_TRANSFER_MAIN_TO_LOCAL, GCM_TRANSFER_SURFACE);
+    rsxSetTransferScaleSurface(context, &scale, &surface);
+}
+
+static int wait_rsx_idle_timeout(int max_us) {
+    rsxSetWriteBackendLabel(context, GCM_LABEL_INDEX, label_val);
+    rsxFlushBuffer(context);
+    while (*(vu32 *)gcmGetLabelAddress(GCM_LABEL_INDEX) != label_val) {
+        if (max_us <= 0) { label_val++; return 0; }
+        usleep(100);
+        max_us -= 100;
+    }
+    label_val++;
+    return 1;
+}
+
+static void hw_scale_init(void) {
+    int i, ok = 1;
+    const u32 pattern = 0x00123456;
+    /* inside the RSX-mapped host region, after the command buffer */
+    for (i = 0; i < 2; i++) {
+        src_buf[i] = (u32 *)((u8 *)host_addr + CB_SIZE + i * ((RW * RH * 4 + 0xFFFF) & ~0xFFFF));
+        if (rsxAddressToOffset(src_buf[i], &src_off[i]) != 0) return;
+    }
+    for (i = 0; i < RW * RH; i++) src_buf[0][i] = pattern;
+    __sync_synchronize();
+    fb[0][0] = 0; fb[0][(scr_h / 2) * scr_w + scr_w / 2] = 0; fb[0][scr_w * scr_h - 1] = 0;
+    hw_blit(0, 0);
+    if (!wait_rsx_idle_timeout(500000)) ok = 0;
+    if (ok && (fb[0][0] & 0xFFFFFF) != pattern) ok = 0;
+    if (ok && (fb[0][(scr_h / 2) * scr_w + scr_w / 2] & 0xFFFFFF) != pattern) ok = 0;
+    if (ok && (fb[0][scr_w * scr_h - 1] & 0xFFFFFF) != pattern) ok = 0;
+    hw_scale = ok;
+}
+
 void plat_present(void) {
     wait_flip();                                   /* previous flip done -> fb[cur_fb] is free */
-    r_present_to(fb[cur_fb], scr_w, scr_h, scr_w);
+    if (hw_scale) {
+        /* src_buf[cur_fb] was last read by the blit before the flip we just waited on */
+        memcpy(src_buf[cur_fb], rb_color, RW * RH * 4);
+        __sync_synchronize();
+        hw_blit(cur_fb, cur_fb);
+    } else {
+        r_present_to(fb[cur_fb], scr_w, scr_h, scr_w);
+    }
     do_flip(cur_fb);
     cur_fb ^= 1;
+}
+
+/* ---- second hardware thread for rendering ------------------------------ */
+static void (*par_fn)(int);
+static void par_entry(void *arg) {
+    (void)arg;
+    par_fn(1);
+    sysThreadExit(0);
+}
+
+void plat_parallel(void (*fn)(int)) {
+    sys_ppu_thread_t tid;
+    u64 ret;
+    par_fn = fn;
+    if (sysThreadCreate(&tid, par_entry, NULL, 1000, 0x10000, THREAD_JOINABLE, "render1") != 0) {
+        fn(0); fn(1);                              /* couldn't start a thread: do both here */
+        return;
+    }
+    fn(0);
+    sysThreadJoin(tid, &ret);
 }
 
 /* ------------------------------------------------------------ pads */
@@ -312,6 +416,7 @@ int plat_init(int argc, char **argv) {
     sysLwMutexCreate(&mix_mutex, &mattr);
 
     if (video_init() != 0) return -1;
+    hw_scale_init();
     ioPadInit(7);
     audio_init();
     return 0;
