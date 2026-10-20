@@ -255,6 +255,7 @@ static int score, highscore, new_highscore;
 static float state_time, title_anim, toast_time;
 static char toast[32];
 static int move_sound_index;
+static int queued_dir = -1;   /* hop requested mid-air, run on landing */
 static int rumble_frames;
 static unsigned int prev_dir_held;
 
@@ -940,6 +941,7 @@ static void engine_init(void) {
     memset(feathers, 0, sizeof(feathers));
     memset(water_parts, 0, sizeof(water_parts));
     cam_count = 0;
+    queued_dir = -1;
     /* FIX: reset the camera too */
     world_pos.x = world_pos.y = world_pos.z = 0;
     scene_pos.x = scene_pos.y = scene_pos.z = 0;
@@ -959,6 +961,9 @@ static void forward_scene(void) {
         cam_count = -world_pos.z;
         map_new_row(-1);
     }
+    /* FIX: never let the chicken get near the edge of the generated map,
+       even if it outpaces the camera */
+    while (row_count < (int)hero.pos.z + 16) map_new_row(-1);
 }
 
 static void check_out_of_frame(void) {
@@ -1129,10 +1134,20 @@ void game_input(unsigned int pressed, unsigned int released, unsigned int held) 
         }
         /* GestureView: touch-down squashes the chicken, release hops */
         if ((pressed & dirs) && !is_game_ended()) player_posie();
-        if (released & (PAD_UP | PAD_CROSS)) move_with_direction(SWIPE_UP);
-        else if (released & PAD_DOWN) move_with_direction(SWIPE_DOWN);
-        else if (released & PAD_LEFT) move_with_direction(SWIPE_LEFT);
-        else if (released & PAD_RIGHT) move_with_direction(SWIPE_RIGHT);
+        {
+            /* FIX: a hop pressed mid-air is buffered and starts on landing
+               (after the landing has been checked for water/trees), instead
+               of snapping to the target and chaining hops forever. */
+            int dir = -1;
+            if (released & (PAD_UP | PAD_CROSS)) dir = SWIPE_UP;
+            else if (released & PAD_DOWN) dir = SWIPE_DOWN;
+            else if (released & PAD_LEFT) dir = SWIPE_LEFT;
+            else if (released & PAD_RIGHT) dir = SWIPE_RIGHT;
+            if (dir >= 0) {
+                if (hero.moving) queued_dir = dir;
+                else move_with_direction(dir);
+            }
+        }
         break;
     case GS_PAUSED:
         if (pressed & (PAD_START | PAD_CROSS)) {
@@ -1172,6 +1187,12 @@ void game_step(void) {
     player_idle_update();
     particles_update();
     engine_tick();
+    /* run a buffered hop once the landing has been processed */
+    if (queued_dir >= 0 && !hero.moving) {
+        int dir = queued_dir;
+        queued_dir = -1;
+        if (game_state == GS_PLAYING && hero.alive) move_with_direction(dir);
+    }
 }
 
 /* ============================================================ rendering */
