@@ -1,0 +1,8 @@
+build/
+build_test/
+*.elf
+*.self
+*.pkg
+*.map
+*.o
+*.d

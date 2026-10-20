@@ -1,0 +1,82 @@
+name: Build PS3 pkg
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    env:
+      PS3DEV: ${{ github.workspace }}/../ps3dev
+      PSL1GHT: ${{ github.workspace }}/../ps3dev
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install host packages
+        run: |
+          sudo apt-get update
+          sudo apt-get -y install autoconf automake bison flex gcc libelf-dev make texinfo \
+            libncurses-dev patch python3 python-is-python3 python3-dev wget zlib1g-dev \
+            libtool-bin bzip2 libgmp-dev libmpfr-dev libmpc-dev pkg-config libssl-dev git
+
+      - name: Set paths
+        run: |
+          echo "PATH=$PATH:$PS3DEV/bin:$PS3DEV/ppu/bin:$PS3DEV/spu/bin" >> "$GITHUB_ENV"
+
+      - name: Cache ps3dev (toolchain + PSL1GHT)
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/../ps3dev
+          key: ps3dev-v1-${{ runner.os }}
+
+      # Fast path: upstream ps3toolchain publishes nightly prebuilt toolchains.
+      - name: Download prebuilt toolchain
+        if: steps.cache.outputs.cache-hit != 'true'
+        id: prebuilt
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          TAG=$(gh release list --repo ps3dev/ps3toolchain --limit 1 --json tagName -q '.[0].tagName')
+          echo "using $TAG"
+          gh release download "$TAG" --repo ps3dev/ps3toolchain --pattern 'ps3dev-linux-*.tar.gz' --dir /tmp/tc
+          mkdir -p "$PS3DEV/.."
+          tar -xzf /tmp/tc/ps3dev-linux-*.tar.gz -C "$PS3DEV/.."
+          test -x "$PS3DEV/ppu/bin/ppu-gcc" || test -x "$PS3DEV/ppu/bin/powerpc64-ps3-elf-gcc"
+
+      # Slow path (~1.5 h, then cached): build the toolchain from source.
+      - name: Build toolchain from source
+        if: steps.cache.outputs.cache-hit != 'true' && steps.prebuilt.outcome != 'success'
+        run: |
+          git clone --depth 1 https://github.com/ps3dev/ps3toolchain /tmp/ps3toolchain
+          cd /tmp/ps3toolchain
+          (cd build 2>/dev/null || mkdir -p build)
+          ./toolchain.sh 001 002 004 005 006
+
+      - name: Build PSL1GHT
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth 1 https://github.com/ps3dev/PSL1GHT /tmp/PSL1GHT
+          cd /tmp/PSL1GHT
+          make install-ctrl
+          make
+          make install
+
+      - name: Build pkg
+        run: make pkg
+
+      - name: Collect output
+        run: |
+          mkdir -p out
+          cp bouncy-ps3.pkg out/
+          cp bouncy-ps3.self out/ 2>/dev/null || true
+          ls -la out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bouncy-ps3-pkg
+          path: out/
