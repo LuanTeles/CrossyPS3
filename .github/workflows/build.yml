@@ -2,8 +2,12 @@ name: Build PS3 pkg
 
 on:
   push:
+    branches-ignore: [pkg-builds]
   pull_request:
   workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -80,3 +84,18 @@ jobs:
         with:
           name: bouncy-ps3-pkg
           path: out/
+
+      # Also keep the latest .pkg on a branch, so it has a direct download
+      # link: https://github.com/<owner>/<repo>/raw/pkg-builds/bouncy-ps3.pkg
+      - name: Publish pkg to pkg-builds branch
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        run: |
+          mkdir -p /tmp/pub && cp out/bouncy-ps3.pkg /tmp/pub/
+          cd /tmp/pub
+          git init -q -b pkg-builds
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          echo "Built from ${GITHUB_SHA}" > BUILD.txt
+          git add -A
+          git commit -q -m "pkg from ${GITHUB_SHA::8}"
+          git push -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" pkg-builds
